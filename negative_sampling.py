@@ -16,9 +16,10 @@ import os
 class NegativeSampler(object):
     def __init__(self, f: np.array):
         pmf = np.power(f, 3.0/4)
-        pmf = np.squeeze(normalize(pmf, norm="l1"))
+        pmf = np.squeeze(pmf)
         self.pmf = tf.convert_to_tensor(pmf)
-        self.pmf = tf.math.log(self.pmf)
+        self.pmf = tf.math.log(self.pmf) - \
+            tf.math.log(tf.math.reduce_sum(self.pmf))
         print(self.pmf.shape)
 
     def sample(self, n: int = 5):
@@ -83,6 +84,7 @@ def Context_target_candidates(text: str, n: int):
     cleaned_words = []
     sentences = nltk.sent_tokenize(text=text)
     for sentence in sentences:
+        # print(sentence)
         words = [word for word in nltk.word_tokenize(
             sentence) if word not in string.punctuation]
         s = len(words)
@@ -93,12 +95,6 @@ def Context_target_candidates(text: str, n: int):
             cleaned_words += words
             target_bounds += bounds
     return cleaned_words, target_bounds
-
-
-def get_text(file_name: str) -> str:
-    text_file_name = file_name
-    with open(text_file_name, "r") as text_file:
-        return text_file.read().lower()
 
 
 class EmbeddingModel(Model):
@@ -117,6 +113,9 @@ class EmbeddingModel(Model):
     def call(self, x, training=False):
         c = self.word_embedding(x[:, :, 0], training=training)
         t = self.realation_embedding(x[:, :, 1], training=training)
+        c = tf.nn.l2_normalize(c, -1)
+        t = tf.nn.l2_normalize(t, -1)
+        # pred = tf.reduce_sum(c*t, -1, keepdims=True)
         pred = tf.math.sigmoid(tf.reduce_sum(c*t, -1, keepdims=True))
         return pred
         # return c
@@ -150,13 +149,16 @@ class WordEmbedder(object):
         dataset = dataset.shuffle(buffer_size=10000)
         size = len(text_vector)-neigbhourhood-neigbhourhood
         training_size = int(size*(1-validation_slice))
-        self.training = dataset.take(training_size).batch(batch_size)
-        self.validation = dataset.skip(training_size).batch(batch_size)
+        self.training = dataset.take(training_size).batch(
+            batch_size, drop_remainder=True)
+        self.validation = dataset.skip(training_size).batch(
+            batch_size, drop_remainder=True)
 
     def train(self, epochs: int = 10, validation_split: float = 0.0):
         log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         tensorboard_callback = keras.callbacks.TensorBoard(log_dir=log_dir)
         loss = tf.keras.losses.BinaryCrossentropy()
+        # loss = tf.keras.losses.MeanSquaredError()
         for (x, y) in self.training.take(1):
             self.embedder(x)
             # print(loss(y, self.embedder(x)))
